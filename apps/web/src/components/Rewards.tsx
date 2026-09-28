@@ -31,6 +31,7 @@ const REWARD_ERRORS: Record<number, string> = {
   9: 'The daily reward limit was reached — try again tomorrow.',
   10: 'This account is under review and can’t claim right now.',
   12: 'You need to receive funds first before claiming (mainnet rule).',
+  13: 'This reward’s pool is used up.',
 };
 
 /**
@@ -112,6 +113,9 @@ export function Rewards({ address }: { address: string }) {
           <ul className="flex flex-col gap-2">
             {rows.map((r) => {
               const unlocked = (earned ?? 0) >= Number(r.threshold);
+              const cap = r.max_claims ?? 0;
+              const left = cap > 0 ? Math.max(0, cap - (r.claims ?? 0)) : null;
+              const soldOut = left === 0;
               return (
                 <li
                   key={r.id}
@@ -120,14 +124,27 @@ export function Rewards({ address }: { address: string }) {
                   <span className="text-sm text-muted-foreground">
                     {Number(r.threshold)} XP →{' '}
                     <span className="font-semibold text-primary">{stroopsToUsdc(r.amount)} USDC</span>
+                    {left !== null && (
+                      <span className="ml-2 text-xs text-muted-foreground">
+                        · {soldOut ? 'none left' : `${left} of ${cap} left`}
+                      </span>
+                    )}
                   </span>
                   <Button
                     size="sm"
-                    variant={r.claimed || !unlocked ? 'secondary' : 'primary'}
+                    variant={r.claimed || soldOut || !unlocked ? 'secondary' : 'primary'}
                     onClick={() => onClaim(r.id)}
-                    disabled={busy !== null || r.claimed || !unlocked}
+                    disabled={busy !== null || r.claimed || soldOut || !unlocked}
                   >
-                    {r.claimed ? 'Claimed' : busy === r.id ? 'Claiming…' : unlocked ? 'Claim' : 'Locked'}
+                    {r.claimed
+                      ? 'Claimed'
+                      : soldOut
+                        ? 'Sold out'
+                        : busy === r.id
+                          ? 'Claiming…'
+                          : unlocked
+                            ? 'Claim'
+                            : 'Locked'}
                   </Button>
                 </li>
               );

@@ -298,3 +298,97 @@ fn non_admin_upgrade_reverts() {
     let hash = soroban_sdk::BytesN::from_array(&env, &[1; 32]);
     client.upgrade(&hash);
 }
+
+/// The host error a `panic_with_error!(Error::X)` surfaces as through a `try_` call.
+fn contract_err(e: Error) -> soroban_sdk::Error {
+    soroban_sdk::Error::from_contract_error(e as u32)
+}
+
+/// A wallet with enough Earned XP to clear `threshold`.
+fn earner(f: &Fixture, xp: u64) -> Address {
+    let user = Address::generate(&f.env);
+    f.rep.award_xp(&f.attester, &user, &2u32, &xp);
+    user
+}
+
+#[test]
+fn capped_reward_pays_the_last_claim_and_rejects_the_next() {
+    let f = setup();
+    f.rewards.add_reward(&1u32, &30u64, &50i128);
+    f.rewards.set_reward_supply(&1u32, &2u32);
+
+    let (a, b, c) = (earner(&f, 30), earner(&f, 30), earner(&f, 30));
+    f.rewards.claim_reward(&a, &1u32);
+    f.rewards.claim_reward(&b, &1u32); // the last one the pool pays
+
+    let stats = f.rewards.get_reward_stats(&1u32);
+    assert_eq!((stats.max_claims, stats.claims), (2, 2));
+    assert_eq!(
+        f.rewards.try_claim_reward(&c, &1u32),
+        Err(Ok(contract_err(Error::RewardExhausted)))
+    );
+    let token_c = token::TokenClient::new(&f.env, &f.usdc);
+    assert_eq!(token_c.balance(&c), 0);
+    assert_eq!(token_c.balance(&f.rewards_id), 900);
+}
+
+#[test]
+fn uncapped_reward_counts_claims_without_a_limit() {
+    let f = setup();
+    f.rewards.add_reward(&1u32, &30u64, &10i128);
+    for _ in 0..5 {
+        let u = earner(&f, 30);
+        f.rewards.claim_reward(&u, &1u32);
+    }
+    let stats = f.rewards.get_reward_stats(&1u32);
+    assert_eq!((stats.max_claims, stats.claims), (0, 5));
+}
+
+#[test]
+fn get_rewards_reports_supply_and_claims() {
+    let f = setup();
+    f.rewards.add_reward(&1u32, &30u64, &50i128);
+    f.rewards.add_reward(&2u32, &60u64, &100i128);
+    f.rewards.set_reward_supply(&1u32, &3u32);
+    let u = earner(&f, 30);
+    f.rewards.claim_reward(&u, &1u32);
+
+    let rows = f.rewards.get_rewards();
+    let r1 = rows.get(0).unwrap();
+    assert_eq!((r1.id, r1.max_claims, r1.claims), (1, 3, 1));
+    let r2 = rows.get(1).unwrap();
+    assert_eq!((r2.id, r2.max_claims, r2.claims), (2, 0, 0));
+}
+
+#[test]
+fn supply_cannot_drop_below_claims_already_paid() {
+    let f = setup();
+    f.rewards.add_reward(&1u32, &30u64, &50i128);
+    for _ in 0..2 {
+        let u = earner(&f, 30);
+        f.rewards.claim_reward(&u, &1u32);
+    }
+    assert_eq!(
+        f.rewards.try_set_reward_supply(&1u32, &1u32),
+        Err(Ok(contract_err(Error::InvalidSupply)))
+    );
+    // Capping at exactly the paid count closes the pool; 0 reopens it.
+    f.rewards.set_reward_supply(&1u32, &2u32);
+    let late = earner(&f, 30);
+    assert_eq!(
+        f.rewards.try_claim_reward(&late, &1u32),
+        Err(Ok(contract_err(Error::RewardExhausted)))
+    );
+    f.rewards.set_reward_supply(&1u32, &0u32);
+    f.rewards.claim_reward(&late, &1u32);
+    assert_eq!(f.rewards.get_reward_stats(&1u32).claims, 3);
+}
+
+#[test]
+fn supply_for_an_unknown_reward_reverts() {
+    let f = setup();
+    assert_eq!(
+        f.rewards.try_set_reward_supply(&9u32, &5u32),
+        Err(Ok(contract_err(Error::RewardNotFound)))
+    );
+}
