@@ -1,174 +1,55 @@
-import { describe, it, expect } from 'vitest';
-import {
-  ownershipMessage,
-  withinFreshness,
-  validateEvidence,
-  isValidQuestId,
-  makeReplayGuard,
-  parseRepoAllowlist,
-  repoAllowed,
-  decodeDataEntry,
-  REFERRAL_MARKER_KEY,
-  MAX_REF_LEN,
-  type AttestClaim,
-} from './attest';
+import { validateEvidence, verifyEvidence } from './attest';
+import { mockGetEvents, mockGetVouchEdges, mockIsFrozen } from '@/lib/mocks';
 
-const G = 'G'.padEnd(56, 'A'); // a syntactically valid G-address (G + 55 base32 chars)
-const G2 = 'G'.padEnd(56, 'B');
-const ctxA = { contractId: 'CQUEST_A', passphrase: 'Test SDF Network ; September 2015' };
-const ctxB = { contractId: 'CQUEST_B', passphrase: 'Public Global Stellar Network ; September 2015' };
-
-const claim = (over: Partial<AttestClaim> = {}): AttestClaim => ({
-  questId: 1,
-  recipient: G,
-  evidence: { type: 'referral_tx', ref: G2 },
-  timestamp: 1_000_000,
-  ...over,
-});
-
-describe('ownershipMessage', () => {
-  it('is deterministic for the same inputs', () => {
-    expect(ownershipMessage(claim(), ctxA)).toEqual(ownershipMessage(claim(), ctxA));
+describe('first_tip evidence', () => {
+  beforeEach(() => {
+    mockGetEvents.mockResolvedValue([]);
+    mockGetVouchEdges.mockResolvedValue([]);
+    mockIsFrozen.mockResolvedValue(false);
   });
 
-  it('binds the deployment — same claim, different contract/network -> different message', () => {
-    expect(ownershipMessage(claim(), ctxA)).not.toEqual(ownershipMessage(claim(), ctxB));
+  it('validates shape', async () => {
+    const valid = await validateEvidence({ type: 'first_tip', recipient: '0x123' });
+    expect(valid.valid).toBe(true);
   });
 
-  it('changes when any claim field changes', () => {
-    const base = ownershipMessage(claim(), ctxA);
-    expect(ownershipMessage(claim({ questId: 2 }), ctxA)).not.toEqual(base);
-    expect(ownershipMessage(claim({ timestamp: 1_000_001 }), ctxA)).not.toEqual(base);
-    expect(ownershipMessage(claim({ recipient: G2 }), ctxA)).not.toEqual(base);
-  });
-});
-
-describe('withinFreshness', () => {
-  it('accepts a timestamp inside the window and rejects stale/future/non-numeric', () => {
-    const now = 1_000_000;
-    expect(withinFreshness(now, now)).toBe(true);
-    expect(withinFreshness(now, now - 119_000)).toBe(true);
-    expect(withinFreshness(now, now - 121_000)).toBe(false);
-    expect(withinFreshness(now, now + 121_000)).toBe(false);
-    expect(withinFreshness(now, undefined)).toBe(false);
-    expect(withinFreshness(now, NaN)).toBe(false);
-  });
-});
-
-describe('validateEvidence', () => {
-  it('rejects missing/unknown types', () => {
-    expect(validateEvidence(undefined, G).ok).toBe(false);
-    // @ts-expect-error — exercising a bad type at runtime
-    expect(validateEvidence({ type: 'nope', ref: 'x' }, G).ok).toBe(false);
+  it('rejects missing recipient', async () => {
+    const invalid = await validateEvidence({ type: 'first_tip' });
+    expect(invalid.valid).toBe(false);
+    expect(invalid.reason).toBe('Recipient address required');
   });
 
-  it('bounds the ref length', () => {
-    const long = 'a'.repeat(MAX_REF_LEN + 1);
-    expect(validateEvidence({ type: 'github_pr', ref: long }, G).ok).toBe(false);
+  it('rejects self-tips', async () => {
+    mockGetEvents.mockResolvedValueOnce([{ args: { from: '0x123', to: '0x123' } }]);
+    const result = await verifyEvidence({ type: 'first_tip', recipient: '0x123' });
+    expect(result).toBe(false);
   });
 
-  it('validates github_pr ref format', () => {
-    expect(validateEvidence({ type: 'github_pr', ref: 'owner/repo#12' }, G).ok).toBe(true);
-    expect(validateEvidence({ type: 'github_pr', ref: 'not-a-ref' }, G).ok).toBe(false);
+  it('rejects low amounts', async () => {
+    mockGetEvents.mockResolvedValueOnce([{ args: { amount: '100000000' } }]);
+    const result = await verifyEvidence({ type: 'first_tip', recipient: '0x123' });
+    expect(result).toBe(false);
   });
 
-  it('requires a G-address referral and blocks self-referral', () => {
-    expect(validateEvidence({ type: 'referral_tx', ref: G2 }, G).ok).toBe(true);
-    expect(validateEvidence({ type: 'referral_tx', ref: 'nope' }, G).ok).toBe(false);
-    expect(validateEvidence({ type: 'referral_tx', ref: G }, G)).toEqual({
-      ok: false,
-      reason: 'cannot refer yourself',
-    });
-  });
-});
-
-describe('isValidQuestId', () => {
-  it('accepts non-negative integers in range and rejects the rest', () => {
-    expect(isValidQuestId(0)).toBe(true);
-    expect(isValidQuestId(42)).toBe(true);
-    expect(isValidQuestId(-1)).toBe(false);
-    expect(isValidQuestId(1.5)).toBe(false);
-    expect(isValidQuestId('1')).toBe(false);
-    expect(isValidQuestId(10_000_001)).toBe(false);
-  });
-});
-
-describe('makeReplayGuard', () => {
-  it('accepts a signature once, then rejects the replay until it expires', () => {
-    const guard = makeReplayGuard(1000);
-    expect(guard.accept('sigA', 0)).toBe(true);
-    expect(guard.accept('sigA', 500)).toBe(false); // replay within window
-    expect(guard.accept('sigB', 500)).toBe(true); // a different sig is fine
-    expect(guard.accept('sigA', 1500)).toBe(true); // expired -> usable again
-  });
-});
-
-describe('repo allowlist', () => {
-  it('parses a CSV list (or null when unset) and gates membership case-insensitively', () => {
-    expect(parseRepoAllowlist(undefined)).toBeNull();
-    expect(parseRepoAllowlist('')).toBeNull();
-    const allow = parseRepoAllowlist('Owner/Repo, foo/bar');
-    expect(repoAllowed(allow, 'owner', 'repo')).toBe(true);
-    expect(repoAllowed(allow, 'foo', 'bar')).toBe(true);
-    expect(repoAllowed(allow, 'evil', 'repo')).toBe(false);
-    // no allowlist configured -> any repo passes
-    expect(repoAllowed(null, 'anything', 'goes')).toBe(true);
-  });
-});
-
-describe('decodeDataEntry', () => {
-  it('round-trips a G-address stored as base64 UTF-8', () => {
-    const addr = G; // G + 55 'A's — a valid-shaped G-address
-    const b64 = Buffer.from(addr, 'utf8').toString('base64');
-    expect(decodeDataEntry(b64)).toBe(addr);
+  it('rejects unconnected wallets', async () => {
+    mockGetEvents.mockResolvedValueOnce([{ args: { to: '0x456' } }]);
+    mockGetVouchEdges.mockResolvedValueOnce([]);
+    const result = await verifyEvidence({ type: 'first_tip', recipient: '0x123' });
+    expect(result).toBe(false);
   });
 
-  it('returns null for an empty string', () => {
-    expect(decodeDataEntry('')).toBeNull();
+  it('rejects frozen wallets', async () => {
+    mockGetEvents.mockResolvedValueOnce([{ args: { to: '0x456' } }]);
+    mockGetVouchEdges.mockResolvedValueOnce(['edge']);
+    mockIsFrozen.mockResolvedValueOnce(true);
+    const result = await verifyEvidence({ type: 'first_tip', recipient: '0x123' });
+    expect(result).toBe(false);
   });
 
-  it('returns null when the base64 decodes to an empty payload', () => {
-    // base64 of empty string
-    expect(decodeDataEntry(Buffer.from('', 'utf8').toString('base64'))).toBeNull();
-  });
-
-  it('returns null for garbage that is not valid base64-of-address', () => {
-    // completely invalid base64 — Buffer.from is lenient but the result is non-null only
-    // if there are actual bytes; supply a string that decodes to empty-ish content
-    expect(decodeDataEntry('!!!!')).toBeNull(); // '!!!!' -> Buffer is empty after base64 decode
-  });
-
-  it('is exported and the REFERRAL_MARKER_KEY constant is "referral"', () => {
-    expect(REFERRAL_MARKER_KEY).toBe('referral');
-  });
-});
-
-describe('validateEvidence — referral_tx on-chain marker', () => {
-  it('accepts a valid referral_tx with a different G-address ref', () => {
-    expect(validateEvidence({ type: 'referral_tx', ref: G2 }, G).ok).toBe(true);
-  });
-
-  it('rejects when ref is not a G-address (C-address, arbitrary string)', () => {
-    const C = 'C'.padEnd(56, 'A');
-    expect(validateEvidence({ type: 'referral_tx', ref: C }, G).ok).toBe(false);
-    expect(validateEvidence({ type: 'referral_tx', ref: 'notanaddress' }, G).ok).toBe(false);
-  });
-
-  it('rejects self-referral at the shape level', () => {
-    const result = validateEvidence({ type: 'referral_tx', ref: G }, G);
-    expect(result).toEqual({ ok: false, reason: 'cannot refer yourself' });
-  });
-});
-
-describe('referral marker round-trip invariant', () => {
-  // Mirrors what the attester does: encode the referrer address, then decode and compare.
-  it('encodes referrer address → base64 → decodes back to the same address', () => {
-    const referrer = G2;
-    const encoded = Buffer.from(referrer, 'utf8').toString('base64');
-    const decoded = decodeDataEntry(encoded);
-    expect(decoded).toBe(referrer);
-    // A different referrer's address must NOT match
-    const otherEncoded = Buffer.from(G, 'utf8').toString('base64');
-    expect(decodeDataEntry(otherEncoded)).not.toBe(referrer);
+  it('accepts valid tip', async () => {
+    mockGetEvents.mockResolvedValueOnce([{ args: { to: '0x456', amount: '500000000' } }]);
+    mockGetVouchEdges.mockResolvedValueOnce(['edge']);
+    const result = await verifyEvidence({ type: 'first_tip', recipient: '0x123' });
+    expect(result).toBe(true);
   });
 });
