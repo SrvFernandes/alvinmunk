@@ -1,95 +1,74 @@
 'use client';
 
-import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
-import { Menu, X } from 'lucide-react';
-import { Logo } from '@/components/brand/logo';
-import { ConnectButton } from '@/components/wallet/connect-button';
-import { useTranslations } from '@/lib/i18n';
-import { cn } from '@/lib/utils';
+import { Button } from '../ui/button';
+import { LanguageSwitcher } from '../LanguageSwitcher';
+import { Sheet, SheetContent, SheetTrigger } from '../ui/sheet';
+import { Menu } from 'lucide-react';
 
 export function Navbar() {
-  const t = useTranslations();
   const pathname = usePathname();
-  const [open, setOpen] = useState(false);
-  const [scrolled, setScrolled] = useState(false);
-
-  const LINKS = [
-    { href: '/how-it-works', label: t('nav.howItWorks') },
-    { href: '/leaderboard', label: t('nav.leaderboard') },
-    { href: '/stats', label: t('nav.stats') },
-    { href: '/wallet', label: t('nav.wallet') },
-  ];
-
-  useEffect(() => {
-    const onScroll = () => setScrolled(window.scrollY > 12);
-    onScroll();
-    window.addEventListener('scroll', onScroll, { passive: true });
-    return () => window.removeEventListener('scroll', onScroll);
-  }, []);
 
   return (
-    <header
-      className={cn(
-        'sticky top-0 z-40 backdrop-blur-xl transition-colors duration-300',
-        scrolled ? 'border-b border-border/70 bg-background/80' : 'border-b border-transparent bg-background/30',
-      )}
-    >
-      <nav className="container flex h-16 items-center justify-between gap-4">
-        <Logo />
-
-        <div className="hidden items-center gap-1 md:flex">
-          {LINKS.map((l) => {
-            const active = pathname === l.href;
-            return (
-              <Link
-                key={l.href}
-                href={l.href}
-                className={cn(
-                  'rounded-full px-4 py-2 text-sm transition-colors',
-                  active ? 'text-foreground' : 'text-muted-foreground hover:text-foreground',
-                )}
-              >
-                {l.label}
-              </Link>
-            );
-          })}
-        </div>
-
-        <div className="flex items-center gap-2">
-          <div className="hidden md:block">
-            <ConnectButton />
+    <header className="sticky top-0 z-50 w-full border-b bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+      <div className="container mx-auto px-4">
+        <div className="flex h-14 items-center justify-between">
+          <div className="flex items-center gap-4">
+            <Sheet>
+              <SheetTrigger asChild>
+                <Button variant="outline" size="icon" className="md:hidden">
+                  <Menu className="h-4 w-4" />
+                </Button>
+              </SheetTrigger>
+              <SheetContent side="left">
+                <div className="flex flex-col gap-4 py-4">
+                  <Link href="/" className="text-sm font-medium">
+                    Home
+                  </Link>
+                  <Link href="/features" className="text-sm font-medium">
+                    Features
+                  </Link>
+                  <Link href="/pricing" className="text-sm font-medium">
+                    Pricing
+                  </Link>
+                  <Link href="/app" className="text-sm font-medium">
+                    App
+                  </Link>
+                  <div className="pt-4 border-t">
+                    <LanguageSwitcher variant="icon" />
+                  </div>
+                </div>
+              </SheetContent>
+            </Sheet>
+            <Link href="/" className="text-lg font-bold">
+              AlvinMunk
+            </Link>
           </div>
-          <button
-            className="inline-flex size-10 items-center justify-center rounded-full text-foreground md:hidden"
-            aria-label={open ? t('nav.closeMenu') : t('nav.openMenu')}
-            onClick={() => setOpen((v) => !v)}
-          >
-            {open ? <X className="size-5" /> : <Menu className="size-5" />}
-          </button>
-        </div>
-      </nav>
-
-      {open && (
-        <div className="border-t border-border/60 bg-background/95 md:hidden">
-          <div className="container flex flex-col gap-1 py-4">
-            {LINKS.map((l) => (
-              <Link
-                key={l.href}
-                href={l.href}
-                onClick={() => setOpen(false)}
-                className="rounded-xl px-4 py-3 text-sm text-foreground/90 hover:bg-muted"
-              >
-                {l.label}
-              </Link>
-            ))}
-            <div className="px-2 pt-2" onClick={() => setOpen(false)}>
-              <ConnectButton />
-            </div>
+          <nav className="hidden md:flex items-center gap-6">
+            <Link href="/features" className="text-sm font-medium hover:underline">
+              Features
+            </Link>
+            <Link href="/pricing" className="text-sm font-medium hover:underline">
+              Pricing
+            </Link>
+            <Link href="/app" className="text-sm font-medium hover:underline">
+              App
+            </Link>
+          </nav>
+          <div className="flex items-center gap-4">
+            {pathname?.startsWith('/app') && (
+              <LanguageSwitcher variant="icon" />
+            )}
+            <Button variant="ghost" size="sm" asChild>
+              <Link href="/login">Sign In</Link>
+            </Button>
+            <Button size="sm" asChild>
+              <Link href="/signup">Sign Up</Link>
+            </Button>
           </div>
         </div>
-      )}
+      </div>
     </header>
   );
 }

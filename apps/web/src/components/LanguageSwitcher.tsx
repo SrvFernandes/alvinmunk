@@ -1,70 +1,52 @@
 'use client';
 
-import { useLocale, type Locale } from '@/lib/i18n';
-import { cn } from '@/lib/utils';
+import Link from 'next/link';
+import { usePathname } from 'next/navigation';
+import { Button } from './ui/button';
 
-const LOCALES: { code: Locale; label: string; flag: string }[] = [
-  { code: 'en', label: 'EN', flag: '🇬🇧' },
-  { code: 'tr', label: 'TR', flag: '🇹🇷' },
-];
+export function LanguageSwitcher({ variant = 'full' }: { variant?: 'full' | 'icon' }) {
+  const pathname = usePathname();
+  const isAppRoute = pathname?.startsWith('/app');
 
-interface Props {
-  /** 'pill' renders both options side-by-side (footer default).
-   *  'icon' renders a compact toggle (e.g. navbar). */
-  variant?: 'pill' | 'icon';
-  className?: string;
-}
-
-/**
- * Language switcher — drops into the footer (pill variant) or navbar (icon variant).
- * Persists choice to localStorage; missing keys always fall back to English.
- */
-export function LanguageSwitcher({ variant = 'pill', className }: Props) {
-  const { locale, setLocale } = useLocale();
+  const switchLanguage = (lang: string) => {
+    const nextLocale = lang === 'en' ? 'tr' : 'en';
+    const newPath = pathname?.replace(/^\/\w{2}/, `/${nextLocale}`) || `/${nextLocale}`;
+    window.location.href = newPath;
+  };
 
   if (variant === 'icon') {
-    const next = locale === 'en' ? 'tr' : 'en';
-    const nextItem = LOCALES.find((l) => l.code === next)!;
     return (
-      <button
-        onClick={() => setLocale(next)}
-        aria-label={`Switch to ${nextItem.label}`}
-        className={cn(
-          'inline-flex items-center gap-1 rounded-full border border-border/60 px-2.5 py-1 font-mono text-[11px] uppercase tracking-wider text-muted-foreground transition-colors hover:border-border hover:text-foreground',
-          className,
-        )}
-      >
-        {nextItem.flag} {nextItem.label}
-      </button>
+      <div className="flex gap-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => switchLanguage('en')}
+          className="text-sm"
+          lang="en"
+        >
+          English
+        </Button>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={() => switchLanguage('tr')}
+          className="text-sm"
+          lang="tr"
+        >
+          Türkçe
+        </Button>
+      </div>
     );
   }
 
-  // pill — both options visible
   return (
-    <div
-      className={cn(
-        'inline-flex items-center gap-0.5 rounded-full border border-border/50 p-0.5',
-        className,
-      )}
-      role="group"
-      aria-label="Language"
-    >
-      {LOCALES.map((l) => (
-        <button
-          key={l.code}
-          onClick={() => setLocale(l.code)}
-          aria-pressed={locale === l.code}
-          aria-label={`Switch to ${l.label}`}
-          className={cn(
-            'rounded-full px-2.5 py-0.5 font-mono text-[11px] uppercase tracking-wider transition-colors',
-            locale === l.code
-              ? 'bg-primary/15 text-foreground'
-              : 'text-muted-foreground hover:text-foreground',
-          )}
-        >
-          {l.flag} {l.label}
-        </button>
-      ))}
+    <div className="flex gap-4">
+      <Link href={pathname?.replace(/^\/\w{2}/, '/en') || '/en'} lang="en" className="text-sm hover:underline">
+        English
+      </Link>
+      <Link href={pathname?.replace(/^\/\w{2}/, '/tr') || '/tr'} lang="tr" className="text-sm hover:underline">
+        Türkçe
+      </Link>
     </div>
   );
 }
