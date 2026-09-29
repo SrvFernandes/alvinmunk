@@ -1,115 +1,103 @@
-'use client';
+import React, { useEffect, useState, useCallback } from 'react';
+import { getScores } from '@/lib/scores';
+import { REFRESH_MS } from '@/lib/constants';
 
-import React, { useEffect, useState } from 'react';
-import { Sparkles, Users, ShieldCheck } from 'lucide-react';
-import { getScores } from '@/lib/reputation';
-import { StateArt } from '@/components/ui/state-art';
-import { cn } from '@/lib/utils';
+interface StatStripProps {
+  address: string;
+}
 
-/**
- * Dashboard stat strip — the at-a-glance reputation summary that anchors the app shell.
- * Reads both XP tracks for the signed-in address; Stars is the human-facing roll-up of
- * Social XP (one star per ~10). Refreshes on mount and on a slow interval so the numbers
- * catch up after a vouch / claim / quest without a full reload.
- */
-const REFRESH_MS = 15_000;
+export const StatStrip: React.FC<StatStripProps> = ({ address }) => {
+  const [scores, setScores] = useState<any | null>(null);
+  const [loading, setLoading] = useState<boolean>(true);
 
-type Tile = {
-  key: 'stars' | 'social' | 'earned';
-  label: string;
-  hint: string;
-  icon: typeof Sparkles;
-  tint: string;
-};
-
-const TILES: Tile[] = [
-  { key: 'stars', label: 'Stars', hint: 'People in your sky', icon: Sparkles, tint: 'text-accent' },
-  { key: 'social', label: 'Social XP', hint: 'Clout · not cashable', icon: Users, tint: 'text-tertiary' },
-  { key: 'earned', label: 'Earned XP', hint: 'Verified · unlocks USDC', icon: ShieldCheck, tint: 'text-secondary' },
-];
-
-export function StatStrip({ address }: { address: string }) {
-  const [scores, setScores] = useState<{ social: number; earned: number } | null>(null);
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let alive = true;
-    const load = () => {
+  const load = useCallback(async (isInitial = false) => {
+    if (isInitial) {
       setLoading(true);
-      getScores(address)
-        .then((s) => {
-          if (alive) {
-            setScores(s);
-            setLoading(false);
-          }
-        })
-        .catch(() => {
-          if (alive) {
-            setScores({ social: 0, earned: 0 });
-            setLoading(false);
-          }
-        });
-    };
-    load();
-    const t = setInterval(load, REFRESH_MS);
-    return () => {
-      alive = false;
-      clearInterval(t);
-    };
+    }
+    try {
+      const data = await getScores(address);
+      setScores(data);
+    } catch (err) {
+      console.error('Failed to load scores:', err);
+    } finally {
+      if (isInitial) {
+        setLoading(false);
+      }
+    }
   }, [address]);
 
-  const stars = scores ? Math.max(0, Math.round(scores.social / 10)) : 0;
-  const value = (k: Tile['key']) =>
-    k === 'stars' ? stars : k === 'social' ? scores?.social ?? 0 : scores?.earned ?? 0;
-  const hasAnySignal = (scores?.social ?? 0) > 0 || (scores?.earned ?? 0) > 0;
+  useEffect(() => {
+    load(true);
+  }, [load]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+
+    let intervalId: NodeJS.Timeout | null = null;
+
+    const startInterval = () => {
+      if (!intervalId) {
+        intervalId = setInterval(() => {
+          if (document.visibilityState === 'visible') {
+            load(false);
+          }
+        }, REFRESH_MS);
+      }
+    };
+
+    const stopInterval = () => {
+      if (intervalId) {
+        clearInterval(intervalId);
+        intervalId = null;
+      }
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'hidden') {
+        stopInterval();
+      } else {
+        load(false);
+        startInterval();
+      }
+    };
+
+    if (document.visibilityState === 'visible') {
+      startInterval();
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
+    return () => {
+      stopInterval();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
+  }, [load]);
+
+  const hasAnySignal = scores && scores.hasSignal;
+  const isInitialLoading = loading && scores === null;
+
+  if (isInitialLoading) {
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div className="animate-pulse h-24 bg-muted rounded-lg" />
+        <div className="animate-pulse h-24 bg-muted rounded-lg" />
+        <div className="animate-pulse h-24 bg-muted rounded-lg" />
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-3">
-      <div className="grid grid-cols-3 gap-3">
-        {loading
-          ? TILES.map((t) => {
-              const Icon = t.icon;
-              return (
-                <div key={t.key} className="glass rounded-2xl p-4">
-                  <div className="mb-2 flex items-center gap-2">
-                    <Icon className={cn('size-4', t.tint)} />
-                    <span className="text-xs font-medium text-muted-foreground">{t.label}</span>
-                  </div>
-                  <div className="h-9 w-16 animate-pulse rounded bg-muted/40" />
-                  <div className="mt-2 h-2 w-20 animate-pulse rounded bg-muted/30" />
-                </div>
-              );
-            })
-          : TILES.map((t) => {
-              const Icon = t.icon;
-              return (
-                <div key={t.key} className="glass rounded-2xl p-4">
-                  <div className="mb-2 flex items-center gap-2">
-                    <Icon className={cn('size-4', t.tint)} />
-                    <span className="text-xs font-medium text-muted-foreground">{t.label}</span>
-                  </div>
-                  <div className="font-display text-3xl font-semibold tabular-nums">
-                    {value(t.key).toLocaleString('en-US')}
-                  </div>
-                  <p className="mt-1 hidden text-[11px] text-muted-foreground/70 sm:block">{t.hint}</p>
-                </div>
-              );
-            })}
+    <div>
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <div>Stat 1: {scores?.stat1 ?? '--'}</div>
+        <div>Stat 2: {scores?.stat2 ?? '--'}</div>
+        <div>Stat 3: {scores?.stat3 ?? '--'}</div>
       </div>
-
       {!loading && !hasAnySignal && (
-        <div className="glass rounded-2xl border border-dashed border-primary/30 p-4">
-          <div className="flex items-start gap-3">
-            <StateArt kind="empty-leaderboard" size={96} className="shrink-0" />
-            <div>
-              <p className="font-display text-lg text-foreground">Your constellation is still quiet</p>
-              <p className="mt-1 text-sm text-muted-foreground">
-                The first vouch, quest, or tip lights up your reputation trail and turns this strip into a living résumé.
-              </p>
-            </div>
-          </div>
+        <div className="mt-4 p-4 border rounded-lg bg-card">
+          <p>No signal detected yet.</p>
         </div>
       )}
     </div>
   );
-}
+};
